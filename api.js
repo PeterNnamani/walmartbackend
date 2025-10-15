@@ -28,7 +28,8 @@ const app = express();
 const allowedOrigins = [
   'http://127.0.0.1:5500',
   'http://localhost:5500',
-  'https://walmart-mu.vercel.app'
+  'https://walmart-mu.vercel.app',
+  'https://walmartbackend.vercel.app' // <-- add this
   // Removed trailing slash variant to avoid mismatch
 ];
 app.use(cors({
