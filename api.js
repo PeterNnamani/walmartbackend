@@ -25,7 +25,11 @@ const nodemailer = require('nodemailer');
 const app = express();
 
 // Allow both 127.0.0.1 and localhost origins
-const allowedOrigins = ['http://127.0.0.1:5500', 'http://localhost:5500'];
+const allowedOrigins = [
+  'http://127.0.0.1:5500',
+  'http://localhost:5500',
+  'https://walmart-mu.vercel.app/'
+];
 app.use(cors({
   origin: function(origin, callback) {
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
