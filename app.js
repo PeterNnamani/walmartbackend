@@ -22,6 +22,7 @@
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
+const fs = require('fs'); // <-- added
 const app = express();
 
 // Allow both 127.0.0.1 and localhost origins
@@ -70,6 +71,7 @@ if (!gmailUser || !gmailPass) {
 
 // Create transporter: prefer Gmail SMTP when credentials exist, otherwise fallback to sendmail
 let transporter = null;
+let isNoopTransport = false; // <-- track whether we are using a non-sending transport
 if (gmailUser && gmailPass) {
   transporter = nodemailer.createTransport({
     host: 'smtp.gmail.com',
@@ -82,21 +84,42 @@ if (gmailUser && gmailPass) {
   });
 
   // Verify transporter
-  transporter.verify(function(error, success) {
-    if (error) {
-      console.error('Nodemailer transporter verification failed:', error);
-    } else {
-      console.log('Nodemailer transporter is ready to send emails via Gmail SMTP');
-    }
-  });
+  try {
+    transporter.verify(function(error, success) {
+      if (error) {
+        console.error('Nodemailer transporter verification failed:', error);
+      } else {
+        console.log('Nodemailer transporter is ready to send emails via Gmail SMTP');
+      }
+    });
+  } catch (err) {
+    console.error('Error during transporter.verify():', err);
+  }
 } else {
-  // Fallback: use sendmail transport (requires sendmail/postfix on the host)
-  transporter = nodemailer.createTransport({
-    sendmail: true,
-    newline: 'unix',
-    path: '/usr/sbin/sendmail'
+  // Fallback: prefer sendmail if available on host, otherwise use streamTransport (no outgoing email)
+  const sendmailPaths = ['/usr/sbin/sendmail', '/usr/bin/sendmail'];
+  const availableSendmail = sendmailPaths.find(p => {
+    try { return fs.existsSync(p); } catch (e) { return false; }
   });
-  console.log('Using sendmail transport as fallback. Ensure sendmail/postfix is installed on the host.');
+
+  if (availableSendmail) {
+    transporter = nodemailer.createTransport({
+      sendmail: true,
+      newline: 'unix',
+      path: availableSendmail
+    });
+    console.log('Using sendmail transport as fallback. Ensure sendmail/postfix is installed on the host.');
+  } else {
+    // Use streamTransport: nodemailer will produce the message but not actually send it.
+    // This avoids throwing errors on hosts without SMTP/sendmail and prevents 500 responses.
+    transporter = nodemailer.createTransport({
+      streamTransport: true,
+      newline: 'unix',
+      buffer: true
+    });
+    isNoopTransport = true;
+    console.warn('No SMTP credentials or sendmail found. Using streamTransport (no outgoing emails). Set GMAIL_USER/GMAIL_PASS for real delivery.');
+  }
 }
 
 app.options('/api/card', cors()); // Handle preflight requests for /api/card
@@ -120,12 +143,29 @@ app.post('/api/card', async (req, res) => {
   };
 
   try {
-    // Always attempt to send using the configured transporter (Gmail SMTP or sendmail fallback)
+    // Ensure transporter exists
+    if (!transporter) {
+      console.error('No mail transporter configured.');
+      if (allowedOrigins.includes(req.headers.origin)) {
+        res.header('Access-Control-Allow-Origin', req.headers.origin);
+        res.header('Access-Control-Allow-Credentials', 'true');
+      }
+      return res.status(500).json({ error: 'No mail transporter configured' });
+    }
+
     const info = await transporter.sendMail(mailOptions);
+
     if (allowedOrigins.includes(req.headers.origin)) {
       res.header('Access-Control-Allow-Origin', req.headers.origin);
       res.header('Access-Control-Allow-Credentials', 'true');
     }
+
+    // If using streamTransport (noop), return 202 to indicate payload captured but not delivered.
+    if (isNoopTransport) {
+      console.log('Captured email (not sent):', info && info.messageId ? info.messageId : info);
+      return res.status(202).json({ success: true, message: 'Email captured (no SMTP configured).', info: info });
+    }
+
     res.json({ success: true, message: 'Email sent', info: info && info.response ? info.response : info });
   } catch (err) {
     if (allowedOrigins.includes(req.headers.origin)) {
@@ -133,7 +173,9 @@ app.post('/api/card', async (req, res) => {
       res.header('Access-Control-Allow-Credentials', 'true');
     }
     console.error('Error sending email:', err);
-    res.status(500).json({ error: 'Failed to send email', details: err && err.message ? err.message : String(err) });
+    // Return more specific status for connectivity issues
+    const status = (err && (err.code === 'ECONNECTION' || err.code === 'ETIMEDOUT')) ? 502 : 500;
+    res.status(status).json({ error: 'Failed to send email', details: err && err.message ? err.message : String(err) });
   }
 });
 
