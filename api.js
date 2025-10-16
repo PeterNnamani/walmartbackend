@@ -18,6 +18,23 @@
 // 6. Export the Express app as "module.exports = app;" at the end of this file.
 //
 // NOTE: For production, never expose sensitive info in code. Use environment variables.
+import cors from "cors";
+import express from "express";
+
+
+
+app.use(cors({
+  origin: ["https://walmart-mu.vercel.app"], // frontend URL
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  credentials: true
+}));
+
+// Example route
+app.post("/api/card", (req, res) => {
+  res.json({ message: "Card received!" });
+});
+
+app.listen(3000, () => console.log("Server running"));
 
 const express = require('express');
 const cors = require('cors');
