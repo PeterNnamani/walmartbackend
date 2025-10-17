@@ -7,7 +7,19 @@ const nodemailer = require('nodemailer');
 const app = express();
 
 // Load local .env in development (optional). Ensure .env is in .gitignore and don't commit secrets.
-require('dotenv').config();
+try {
+	// optional: if not installed, we don't want the app to crash
+	/* eslint-disable global-require */
+	require('dotenv').config();
+	/* eslint-enable global-require */
+} catch (err) {
+	// Do not throw — dotenv is optional. Provide a helpful hint.
+	if (err && err.code === 'MODULE_NOT_FOUND') {
+		console.warn("Optional module 'dotenv' not found. To load a local .env during development run: npm install dotenv --save-dev");
+	} else {
+		console.warn("Warning loading dotenv:", err && err.message);
+	}
+}
 
 const allowedOrigins = [
   'http://127.0.0.1:5500',
