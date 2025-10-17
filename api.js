@@ -182,6 +182,59 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, env: process.env.NODE_ENV || 'development' });
 });
 
+// Debug endpoint: verify SMTP auth/connectivity without sending mail
+app.get('/api/debug/smtp', async (req, res) => {
+  const gmailUser = process.env.GMAIL_USER;
+  const gmailPass = process.env.GMAIL_PASS;
+  if (!gmailUser || !gmailPass) {
+    return res.status(400).json({ ok: false, message: 'Missing GMAIL_USER or GMAIL_PASS in environment' });
+  }
+
+  // Build candidates the same way as in POST /api/card
+  const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const smtpPort = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined;
+  const smtpSecure = typeof process.env.SMTP_SECURE !== 'undefined' ? (process.env.SMTP_SECURE === 'true') : undefined;
+
+  const smtpCandidates = [];
+  if (smtpPort !== undefined || smtpSecure !== undefined) {
+    smtpCandidates.push({ host: smtpHost, port: smtpPort || 465, secure: typeof smtpSecure === 'boolean' ? smtpSecure : (smtpPort === 465), name: `env:${smtpHost}:${smtpPort || 465}` });
+  } else {
+    smtpCandidates.push({ host: smtpHost, port: 465, secure: true, name: `${smtpHost}:465(SSL)` });
+    smtpCandidates.push({ host: smtpHost, port: 587, secure: false, name: `${smtpHost}:587(STARTTLS)` });
+  }
+
+  const commonTransportOpts = {
+    auth: { user: gmailUser, pass: gmailPass },
+    requireTLS: true,
+    connectionTimeout: 60000,
+    greetingTimeout: 30000,
+    socketTimeout: 60000,
+    tls: { rejectUnauthorized: false }
+  };
+
+  for (const c of smtpCandidates) {
+    const opts = Object.assign({ host: c.host, port: c.port, secure: c.secure }, commonTransportOpts);
+    const trans = nodemailer.createTransport(opts);
+    try {
+      await trans.verify();
+      try { trans.close && trans.close(); } catch (_) {}
+      return res.json({ ok: true, candidate: c.name, message: 'SMTP verified (auth successful)'});
+    } catch (err) {
+      // don't leak password - return code/message only
+      try { trans.close && trans.close(); } catch (_) {}
+      // Try next candidate if possible
+      // If last candidate, return error details helpful for debugging
+      const last = smtpCandidates[smtpCandidates.length - 1] === c;
+      if (last) {
+        return res.status(500).json({ ok: false, candidate: c.name, code: err && err.code, message: err && err.message });
+      }
+      // otherwise continue loop
+    }
+  }
+  // fallback
+  res.status(500).json({ ok: false, message: 'Unknown error verifying SMTP' });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`API server running on host 0.0.0.0 and port ${PORT}`);
