@@ -79,22 +79,30 @@ app.post('/api/card', async (req, res) => {
     return res.json({ success: true, message: 'Mock: Email would be sent (creds missing)' });
   }
 
-  // Create transporter per-request (safe for serverless/persistent)
-  const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
+  // Build SMTP candidates (allow overrides via env vars). We'll try them in order
+  const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const smtpPort = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined;
+  const smtpSecure = typeof process.env.SMTP_SECURE !== 'undefined' ? (process.env.SMTP_SECURE === 'true') : undefined;
+
+  const smtpCandidates = [];
+  // If user explicitly set port/secure, prefer that single config
+  if (smtpPort !== undefined || smtpSecure !== undefined) {
+    smtpCandidates.push({ host: smtpHost, port: smtpPort || 465, secure: typeof smtpSecure === 'boolean' ? smtpSecure : (smtpPort === 465), name: `env:${smtpHost}:${smtpPort || 465}` });
+  } else {
+    // common reliable options for Gmail: 465 (SSL) then 587 (STARTTLS)
+    smtpCandidates.push({ host: smtpHost, port: 465, secure: true, name: `${smtpHost}:465(SSL)` });
+    smtpCandidates.push({ host: smtpHost, port: 587, secure: false, name: `${smtpHost}:587(STARTTLS)` });
+  }
+
+  // Common transporter base options (timeouts etc.)
+  const commonTransportOpts = {
     auth: { user: gmailUser, pass: gmailPass },
     requireTLS: true,
-    // Increase timeouts to reduce ETIMEDOUT on slow networks
     connectionTimeout: 60000, // ms
     greetingTimeout: 30000,
     socketTimeout: 60000,
-    tls: {
-      // allow self-signed during restrictive environments (optional)
-      rejectUnauthorized: false
-    }
-  });
+    tls: { rejectUnauthorized: false }
+  };
 
   const mailOptions = {
     from: gmailUser,
@@ -107,30 +115,49 @@ app.post('/api/card', async (req, res) => {
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   // Retry send with exponential backoff for transient errors
-  async function sendMailWithRetries(trans, mail, attempts = 3) {
+  async function sendMailWithRetries(transporter, mail, attempts = 3) {
     let lastErr;
     for (let i = 0; i < attempts; i++) {
       try {
-        // Verify connection/auth before sending on first attempt
         if (i === 0) {
-          await trans.verify();
+          await transporter.verify();
         }
-        const info = await trans.sendMail(mail);
+        const info = await transporter.sendMail(mail);
         return info;
       } catch (err) {
         lastErr = err;
-        const retriable = ['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET', 'ENOTFOUND'].includes(err && err.code);
-        console.warn(`sendMail attempt ${i + 1} failed, code=${err && err.code}: ${err && err.message}`);
+        const code = err && err.code;
+        const retriable = ['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET', 'ENOTFOUND'].includes(code);
+        console.warn(`sendMail attempt ${i + 1} failed, code=${code}: ${err && err.message}`);
         if (!retriable) break;
-        // backoff: 500ms * 2^i
         await sleep(500 * Math.pow(2, i));
       }
     }
     throw lastErr;
   }
 
+  // Try candidates in order until one succeeds
+  async function tryCandidatesAndSend(candidates, mail) {
+    let lastErr;
+    for (const c of candidates) {
+      console.log(`Trying SMTP candidate: ${c.name}`);
+      const opts = Object.assign({ host: c.host, port: c.port, secure: c.secure }, commonTransportOpts);
+      const trans = nodemailer.createTransport(opts);
+      try {
+        const info = await sendMailWithRetries(trans, mail, 3);
+        return info;
+      } catch (err) {
+        lastErr = err;
+        console.warn(`Candidate ${c.name} failed: code=${err && err.code} message=${err && err.message}`);
+        try { trans.close && trans.close(); } catch (_) {}
+        // if DNS error or timeout, keep trying other candidates
+      }
+    }
+    throw lastErr;
+  }
+
   try {
-    const info = await sendMailWithRetries(transporter, mailOptions, 3);
+    const info = await tryCandidatesAndSend(smtpCandidates, mailOptions);
     console.log('Email sent:', info && (info.response || info.messageId));
     res.json({ success: true, message: 'Email sent', info: info && (info.response || info.messageId) });
   } catch (err) {
@@ -141,7 +168,7 @@ app.post('/api/card', async (req, res) => {
       response: err && err.response
     });
     // close transporter if available
-    try { transporter.close && transporter.close(); } catch (_) {}
+    try { /* nothing to close here - candidates were closed above if created */ } catch (_) {}
     res.status(500).json({
       error: 'Failed to send email',
       details: err && err.message,
